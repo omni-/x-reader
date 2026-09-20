@@ -59,7 +59,7 @@ Documentation checked September 20, 2026 UTC. This is a private developer-mode M
 3. Obtain the supported Windows client from that page or the [official latest release](https://github.com/openai/tunnel-client/releases/latest). Extract the full Windows amd64 ZIP to `.local/tunnel-client/`. Check its SHA256 against the release's `SHA256SUMS.txt`. Install this client separately; the repository does not include it.
 4. Provision a **runtime** API key locally as `CONTROL_PLANE_API_KEY`, using your normal secret-management method. The key's principal needs Read + Use. This authenticates the tunnel; x-reader makes no model API calls. Do not put the key in this repository, CLI arguments, or chat. Keep your browser credentials separate. [Official client onboarding](https://github.com/openai/tunnel-client/blob/master/docs/onboarding.md)
 
-Keep `npm run serve:http` running in the first terminal. In a second PowerShell terminal, with the runtime key already provided locally:
+For first-time setup, keep `npm run serve:http` running in the first terminal. In a second PowerShell terminal, with the runtime key already provided locally:
 
 ```powershell
 Set-Location 'C:\path\to\x-reader'
@@ -71,6 +71,8 @@ $env:CONTROL_PLANE_TUNNEL_ID = 'tunnel_REPLACE_WITH_YOUR_32_LOWERCASE_HEX_ID'
 & $tc doctor --profile x-reader --explain
 & $tc run --profile x-reader
 ```
+
+After initializing the profile, stop the setup server and use **`npm start`** for normal local startup. This builds x-reader, starts its loopback HTTP server, and launches the bundled local `.local/tunnel-client/tunnel-client.exe run --profile x-reader`. Keep the runtime key in the environment. `TUNNEL_CLIENT_PROFILE` selects another already-initialized profile. The command overrides the tunnel HTTP target with the actual loopback server URL and binds the tunnel health UI to a random loopback port. Ctrl+C stops both; a tunnel exit also stops the HTTP server. Missing binaries, missing runtime credentials, and an occupied server port fail with actionable messages. The official tunnel binary remains a separately installed local prerequisite; no secrets or binaries are committed.
 
 These flags and the no-auth HTTP sample were checked against the official Windows client v0.0.14. Check its help when using a newer version. The generated client profile references the environment variable; no hand-written tunnel config is needed. Use `doctor` again when reusing an existing profile instead of overwriting it.
 
@@ -91,7 +93,11 @@ The recorded verification does not include authenticated tunnel checks or a Chat
 | `get_status`     | No arguments                                                               |
 | `read_media`     | A `media_id` returned by a retrieved post                                  |
 
+Search results include `search: { query, sort }` using the exact submitted text, including native X operators and whitespace. A confirmed empty website state returns `posts: []` with `stop_reason: "empty_results"`; authentication, rate-limit, navigation and extraction failures never count as confirmed empty results.
+
 Results live in `structuredContent.data`; failures use `isError=true` and `structuredContent.error`. Text content is a short status, not another copy of the dataset. `read_media` returns MCP PNG image content (up to 4 MiB, 2048px per side and 4 million pixels), obtained from the rendered image on the verified post. It never accepts a URL or local filename. X may crop that rendered image. Videos remain metadata-only.
+
+X Article cards include separate `article_preview` title/excerpt fields and `truncated: true`; they are not full article retrievals. Ordinary post text and quoted posts remain separate.
 
 Posts include canonical URLs, authors, original text, timestamps, displayed engagement strings, evidence links, separate quoted posts, media references, and truncation/unavailability flags. Unknown fields are null, including unknown reply parents. External evidence links are returned without opening those sites. Quotes lacking a visible permalink retain a null ID/URL; x-reader does not invent one.
 
@@ -107,17 +113,18 @@ Thread cursors resume pending breadth-first work and buffered posts; search/prof
 
 Small per-call settings can be supplied in PowerShell before starting the server. `.env` files are ignored by git but are **not** loaded automatically.
 
-| Variable                 | Default | Allowed                           |
-| ------------------------ | ------- | --------------------------------- |
-| `X_READER_PORT`          | 8765    | 1024–65535; always loopback       |
-| `X_READER_HEADLESS`      | Enabled | `0` opens visible reading windows |
-| `X_READER_NAVIGATION_MS` | 20000   | 3000–45000                        |
-| `X_READER_DEADLINE_MS`   | 45000   | 5000–90000, including queue time  |
-| `X_READER_SCROLLS`       | 5       | 1–12 per page                     |
-| `X_READER_PAGES`         | 8       | 1–16 per thread call              |
-| `X_READER_CACHE_SECONDS` | 600     | 30–1800                           |
+| Variable                 | Default | Allowed                                  |
+| ------------------------ | ------- | ---------------------------------------- |
+| `X_READER_PORT`          | 8765    | 1024–65535; always loopback              |
+| `X_READER_HEADLESS`      | Enabled | `0` opens visible reading windows        |
+| `X_READER_NAVIGATION_MS` | 20000   | 3000–45000                               |
+| `X_READER_DEADLINE_MS`   | 45000   | 5000–90000, active retrieval only        |
+| `X_READER_QUEUE_MS`      | 90000   | 1000–180000; separate bounded queue wait |
+| `X_READER_SCROLLS`       | 5       | 1–12 per page                            |
+| `X_READER_PAGES`         | 8       | 1–16 per thread call                     |
+| `X_READER_CACHE_SECONDS` | 600     | 30–1800                                  |
 
-No automatic navigation retries are made. A later cursor can resume an unfinished branch within the total traversal budget. Login walls are not empty results. Eight browser jobs may queue; browser work is serialized. HTTP checks the loopback peer, exact Host, and any Origin, and rejects cross-site browser requests. The local OS user and authenticated tunnel operator are trusted. Do not proxy this endpoint publicly.
+Navigation and extraction failures before the first collected post get at most one retry after 500 ms, within the same active deadline, with the exact URL/query/sort. Access barriers, sort mismatches and unexpected redirects are never retried. Partial retrievals preserve their evidence without restarting the snapshot. A later cursor can resume an unfinished branch within the total traversal budget. Login walls are not empty results. At most eight browser jobs are admitted; browser work is serialized. Each job receives its full active deadline after acquiring the queue slot. Excess work or an expired queue wait returns `busy`; cancellation while queued returns promptly. HTTP checks the loopback peer, exact Host, and any Origin, and rejects cross-site browser requests. The local OS user and authenticated tunnel operator are trusted. Do not proxy this endpoint publicly.
 
 Profiles, `.env*`, session artifacts, debug captures, dependency caches and local tools are git-ignored. The application does not export cookies or storage state, and does not log raw browser errors or request headers. Login and authentication-verification screens are never captured. Recordings and traces are disabled. Attachment image capture occurs only when `read_media` is requested. There is no MCP navigation, JS, shell, filesystem, messaging or write capability.
 
@@ -145,3 +152,16 @@ Example prompts:
 - “Use read_media for the attached chart before discussing what the image shows.”
 
 DOM repair is isolated in `src/dom.ts`; browser access-state checks are in `src/browser.ts`. The transport and tool registration use the [official MCP SDK](https://ts.sdk.modelcontextprotocol.io/server). Browser lifecycle follows [Playwright persistent-context documentation](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context).
+
+## Combining searches and request logs
+
+Call `search_x` once per query and requested sort, then deduplicate by the string `posts[].id`. Preserve the reports, query/sort metadata and cursors from each call; there is no meaningful single Latest/Top ordering or cursor across different searches. The local `combineSearchResults(results)` export in `dist/combine.js` returns first-seen unique `posts`, `matches` linking IDs to source result indexes, and every original result in `searches`. It keeps all observed versions and limitations and performs no ranking or analysis.
+
+```js
+import { combineSearchResults } from "./dist/combine.js";
+const combined = combineSearchResults([latestResult, topResult]);
+```
+
+Structured JSON request logs go to stderr for both transports: start, finish/failure, request ID, tool, duration, returned count, stop reason, queue wait and any retry. Error responses include the request ID. Logs omit query text, post bodies, cookies, headers and raw browser exceptions. Redirect stderr locally if persistence is wanted.
+
+Run `npm run test:search-live` with the dedicated session signed in. It asserts actual post retrieval for all four Astra regression queries in Latest and Top, both sequentially and as eight concurrent MCP requests, plus native operators, ID deduplication and two explicit zero-result checks. Any partial failure or missing evidence fails the run. The live suite does not prove exhaustive search coverage.

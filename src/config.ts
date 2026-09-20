@@ -26,6 +26,7 @@ export const config = {
   headless: process.env.X_READER_HEADLESS !== "0",
   navigationMs: integer("X_READER_NAVIGATION_MS", 20000, 3000, 45000),
   deadlineMs: integer("X_READER_DEADLINE_MS", 45000, 5000, 90000),
+  queueMs: integer("X_READER_QUEUE_MS", 90000, 1000, 180000),
   scrolls: integer("X_READER_SCROLLS", 5, 1, 12),
   pages: integer("X_READER_PAGES", 8, 1, 16),
   cacheMs: integer("X_READER_CACHE_SECONDS", 600, 30, 1800) * 1000,

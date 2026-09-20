@@ -111,9 +111,9 @@ export const searchInput = z
   .object({
     query: z
       .string()
-      .trim()
       .min(1)
       .max(500)
+      .refine((s) => s.trim().length > 0, "Query must contain text")
       .refine(
         (s) => !/[\u0000-\u001f\u007f]/.test(s),
         "Control characters are not allowed",

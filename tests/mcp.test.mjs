@@ -80,12 +80,33 @@ test("official MCP client exercises stdio schemas, retrieval, continuation and P
     args: [fileURLToPath(new URL("./mcp-fixture-server.mjs", import.meta.url))],
     stderr: "pipe",
   });
+  let logs = "";
+  transport.stderr.on("data", (chunk) => {
+    logs += chunk;
+  });
   try {
     await client.connect(transport);
     await exercise(client);
   } finally {
     await client.close();
   }
+  const events = logs
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const started = events.filter((event) => event.event === "request_started");
+  assert.ok(started.length > 0);
+  for (const start of started) {
+    assert.ok(
+      events.some(
+        (event) =>
+          event.request_id === start.request_id &&
+          ["request_finished", "request_failed"].includes(event.event),
+      ),
+    );
+  }
+  assert.doesNotMatch(logs, /FAKE_SECRET|Original claim|Cookie|Authorization/);
 });
 
 test("official MCP HTTP client exercises the same stack, Host/Origin guards and clean shutdown", async () => {

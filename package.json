@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "start": "npm run build && node dist/cli.js tunnel",
+    "test:search-live": "npm run build && node scripts/search-live.mjs",
     "browser:install": "playwright install chromium",
     "login": "node dist/cli.js login",
     "diagnostics": "node dist/cli.js diagnostics",

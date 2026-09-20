@@ -2,7 +2,7 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { access } from "node:fs/promises";
 import { config, PROFILE } from "./config.js";
 import { acquireProfile } from "./profile.js";
-import { ReaderError } from "./errors.js";
+import { ReaderError, logEvent } from "./errors.js";
 import type { Status, StopReason } from "./schema.js";
 import { checkEdgeProfilePolicy, edgeExecutable } from "./login.js";
 import { username } from "./validation.js";
@@ -77,6 +77,8 @@ export async function pageState(page: Page): Promise<PageState> {
       )
     )
       return "protected_content";
+    if (/something went wrong|try reloading|failed to load/i.test(text))
+      return "navigation_error";
     if (
       /this (?:post|tweet) (?:is unavailable|was deleted)|(?:hmm.*)?this page doesn(?:’|')t exist|something went wrong.*try reloading/i.test(
         text,
@@ -125,7 +127,7 @@ export function navigationAllowed(value: string): boolean {
   }
 }
 
-function sameReadingTarget(requested: string, actual: string): boolean {
+export function sameReadingTarget(requested: string, actual: string): boolean {
   if (!navigationAllowed(actual)) return false;
   const expected = new URL(requested);
   const observed = new URL(actual);
@@ -173,6 +175,13 @@ export async function navigate(
         "rate_limited",
         "X returned a rate limit. Stop requests and wait before trying again.",
       );
+    if (response && response.status() >= 500)
+      throw new ReaderError(
+        "navigation_error",
+        "X returned a temporary server failure. Retry the unchanged request after a short wait.",
+      );
+    if (response?.status() === 401)
+      throw new ReaderError("login_required", actionFor("login_required"));
     if (!navigationAllowed(page.url()))
       throw new ReaderError(
         "unexpected_redirect",
@@ -204,12 +213,14 @@ export async function navigate(
     if (error instanceof ReaderError) throw error;
     throw new ReaderError(
       "navigation_error",
-      "The X page did not load within the navigation budget. No automatic retry was made.",
+      "The X page failed to load within the navigation budget. Check network access and retry the unchanged request.",
     );
   }
 }
 
 export function actionFor(state: string): string {
+  if (state === "navigation_error")
+    return "X could not load this page. Check network access and retry the unchanged request after a short wait.";
   if (state === "login_required")
     return "Run npm run login, sign in manually, close the browser normally, then retry.";
   if (state === "challenge" || state === "account_restricted")
@@ -247,18 +258,50 @@ export class BrowserSession {
         "The local browser queue is full. Wait for the current request.",
       );
     this.queued++;
+    const queuedAt = Date.now();
     const before = this.tail;
     let done!: () => void;
     this.tail = new Promise((resolve) => {
       done = resolve;
     });
+    const waiting = AbortSignal.any([
+      AbortSignal.timeout(config.queueMs),
+      ...(parent ? [parent] : []),
+    ]);
+    // Queue entries keep their place even if cancelled; they never overtake a live owner.
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const abort = () =>
+          reject(
+            new ReaderError(
+              parent?.aborted ? "cancelled" : "busy",
+              parent?.aborted
+                ? "Request cancelled while waiting for the browser."
+                : "Browser queue wait exceeded its budget. Retry fewer concurrent requests.",
+            ),
+          );
+        waiting.addEventListener("abort", abort, { once: true });
+        before.then(() => {
+          waiting.removeEventListener("abort", abort);
+          resolve();
+        });
+        if (waiting.aborted) abort();
+      });
+    } catch (error) {
+      this.queued--;
+      void before.then(done);
+      throw error;
+    }
     const started = Date.now();
+    logEvent({
+      level: "info",
+      event: "browser_acquired",
+      queue_wait_ms: started - queuedAt,
+    });
     const signal = AbortSignal.any([
       AbortSignal.timeout(config.deadlineMs),
       ...(parent ? [parent] : []),
     ]);
-    // Queue entries keep their place even if cancelled; they never overtake a live owner.
-    await before;
     let release: (() => Promise<void>) | undefined;
     let context: BrowserContext | undefined;
     let closePromise: Promise<void> | undefined;

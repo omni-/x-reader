@@ -1,7 +1,13 @@
 import type { Page } from "playwright";
-import { navigate, pageState, actionFor, checkSignal } from "./browser.js";
+import {
+  navigate,
+  pageState,
+  actionFor,
+  checkSignal,
+  sameReadingTarget,
+} from "./browser.js";
 import { config } from "./config.js";
-import { ReaderError } from "./errors.js";
+import { ReaderError, logEvent } from "./errors.js";
 import { allowedImage, postUrl, safeEvidenceUrl } from "./validation.js";
 import type { Post, StopReason } from "./schema.js";
 import type { MediaRef } from "./reader.js";
@@ -200,6 +206,23 @@ export async function extractVisible(
       const textElement =
         own(article.querySelectorAll('[data-testid="tweetText"]'))[0] ?? null;
       const text = originalText(textElement);
+      const cover = own(
+        article.querySelectorAll('[data-testid="article-cover-image"]'),
+      )[0];
+      const preview = cover?.nextElementSibling;
+      const previewFields = preview
+        ? [...preview.querySelectorAll('[dir="auto"]')]
+        : [];
+      const articlePreview = cover
+        ? {
+            title:
+              originalText(previewFields[0] ?? null)?.slice(0, 2000) ?? null,
+            text:
+              originalText(previewFields[1] ?? null)?.slice(0, 16000) ?? null,
+            limitation:
+              "Rendered X Article preview only; title/excerpt may be clipped. Full article text was not collected.",
+          }
+        : undefined;
       const quotePosts: Post["quoted_posts"] = quotes
         .slice(0, 2)
         .map((quote) => {
@@ -283,6 +306,7 @@ export async function extractVisible(
           display: originalText(a)?.slice(0, 300) ?? null,
         }));
       posts.push({
+        ...(articlePreview ? { article_preview: articlePreview } : {}),
         ...identity,
         author: author(article),
         text: text?.slice(0, 16000) ?? null,
@@ -313,6 +337,7 @@ export async function extractVisible(
           ),
         },
         truncated:
+          !!articlePreview ||
           (text?.length ?? 0) > 16000 ||
           own(
             article.querySelectorAll(
@@ -513,7 +538,7 @@ async function expand(
   return clicked;
 }
 
-export async function collectPage(
+async function collectPageOnce(
   page: Page,
   url: string,
   kind: PageKind,
@@ -565,6 +590,11 @@ export async function collectPage(
     checkSignal(signal);
     const state = await pageState(page);
     if (state !== "ready") throw new ReaderError(state, actionFor(state));
+    if (!sameReadingTarget(url, page.url()))
+      throw new ReaderError(
+        "unexpected_redirect",
+        "The page changed during extraction. No substitute query, sort or page was collected.",
+      );
     const frame = await extractVisible(page, url);
     if (focal && frame.protected_ids.includes(focal))
       throw new ReaderError(
@@ -644,7 +674,10 @@ export async function collectPage(
       break;
     }
     if (frame.boundary || frame.empty) {
-      stop = "no_further_visible_content";
+      stop =
+        frame.empty && !seen.size
+          ? "empty_results"
+          : "no_further_visible_content";
       break;
     }
     if (seen.size >= 100) {
@@ -680,6 +713,53 @@ export async function collectPage(
     scrolls,
     unexpanded,
   };
+}
+
+/** Retry only before emitting evidence; never mix two snapshots after a partial read. */
+export async function collectPage(
+  ...args: Parameters<typeof collectPageOnce>
+): ReturnType<typeof collectPageOnce> {
+  const [page, url, kind, signal, onPost, options] = args;
+  let emitted = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await collectPageOnce(
+        page,
+        url,
+        kind,
+        signal,
+        (post) => {
+          emitted = true;
+          onPost(post);
+        },
+        options,
+      );
+    } catch (error) {
+      checkSignal(signal);
+      const failure =
+        error instanceof ReaderError
+          ? error
+          : new ReaderError(
+              "extraction_error",
+              "The rendered page changed or could not be read. Retry the same request; if it persists, the DOM reader needs updating. No alternate query or ordering was used.",
+            );
+      if (
+        emitted ||
+        attempt === 2 ||
+        !["navigation_error", "extraction_error"].includes(failure.code)
+      )
+        throw failure;
+      logEvent({
+        level: "warn",
+        event: "retrieval_retry",
+        kind,
+        attempt,
+        code: failure.code,
+      });
+      await page.waitForTimeout(500);
+    }
+  }
+  throw new ReaderError("extraction_error", "Retrieval attempts exhausted.");
 }
 
 export async function screenshotMedia(

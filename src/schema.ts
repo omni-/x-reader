@@ -25,6 +25,13 @@ export const quoteSchema = z.object({
   media: z.array(mediaSchema),
 });
 export const postSchema = z.object({
+  article_preview: z
+    .object({
+      title: z.string().nullable(),
+      text: z.string().nullable(),
+      limitation: z.string(),
+    })
+    .optional(),
   id: z.string(),
   url: z.string(),
   author: z.object({
@@ -64,6 +71,7 @@ export type Post = z.infer<typeof postSchema>;
 export type Media = z.infer<typeof mediaSchema>;
 export type Quote = z.infer<typeof quoteSchema>;
 export const stopReasons = [
+  "empty_results",
   "requested_post",
   "configured_limit",
   "snapshot_end",
@@ -108,6 +116,9 @@ export const reportSchema = z.object({
 });
 export type Report = z.infer<typeof reportSchema>;
 export const resultSchema = z.object({
+  search: z
+    .object({ query: z.string(), sort: z.enum(["latest", "top"]) })
+    .optional(),
   posts: z.array(postSchema),
   report: reportSchema,
   next_cursor: z.string().nullable(),
@@ -124,5 +135,9 @@ export const statusSchema = z.object({
 });
 export type Status = z.infer<typeof statusSchema>;
 export const errorSchema = z.object({
-  error: z.object({ code: z.string(), message: z.string() }),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    request_id: z.string().optional(),
+  }),
 });

@@ -172,6 +172,20 @@ test("real browser work serializes, cancels and releases the profile for the nex
     await assert.rejects(aborted, { code: "cancelled" });
     const release = await acquireProfile();
     await release();
+    const queued = await Promise.all(
+      [1, 2].map((id) =>
+        browser.run(async (page) => {
+          await page.setContent(`<p>Queued job ${id}</p>`);
+          await page.waitForTimeout(2800);
+          return page.locator("p").innerText();
+        }),
+      ),
+    );
+    assert.deepEqual(
+      queued,
+      ["Queued job 1", "Queued job 2"],
+      "Queue wait must not consume the next job's five-second retrieval budget",
+    );
     await assert.rejects(
       browser.run(async (page) => {
         await page.setContent("<p>Synthetic deadline</p>");

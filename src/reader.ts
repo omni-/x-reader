@@ -427,7 +427,7 @@ export class Reader {
     return this.output(state, key, limit, cached?.expires);
   }
 
-  search(
+  async search(
     input: z.input<typeof searchInput>,
     signal?: AbortSignal,
   ): Promise<ReadResult> {
@@ -436,7 +436,7 @@ export class Reader {
     url.searchParams.set("q", args.query);
     url.searchParams.set("src", "typed_query");
     if (args.sort === "latest") url.searchParams.set("f", "live");
-    return this.results(
+    const result = await this.results(
       `search:${args.query}:${args.sort}:${args.limit}`,
       url.href,
       "search",
@@ -445,6 +445,7 @@ export class Reader {
       args.sort,
       signal,
     );
+    return { ...result, search: { query: args.query, sort: args.sort } };
   }
 
   userPosts(

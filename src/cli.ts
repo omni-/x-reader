@@ -3,6 +3,7 @@ import { logFailure, ReaderError } from "./errors.js";
 import { Reader, clearCache } from "./reader.js";
 import { createMcpServer } from "./mcp.js";
 import { serveHttp } from "./http.js";
+import { serveTunnel } from "./tunnel.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resetProfile } from "./profile.js";
 import { createInterface } from "node:readline/promises";
@@ -22,7 +23,7 @@ try {
   if (process.argv.length !== 3)
     throw new ReaderError(
       "unknown_command",
-      "Use login, diagnostics, http, stdio, clear-cache or reset-profile without extra arguments.",
+      "Use login, diagnostics, http, stdio, tunnel, clear-cache or reset-profile without extra arguments.",
     );
   const command = process.argv[2];
   if (command === "login") await login();
@@ -57,14 +58,20 @@ try {
     console.log(
       "Stored snapshots and media references will be invalidated before the next tool call in each local server. Profiles are unaffected.",
     );
-  } else if (command === "http" || command === "stdio") {
+  } else if (
+    command === "http" ||
+    command === "stdio" ||
+    command === "tunnel"
+  ) {
     process.once("SIGINT", () => {
       void shutdown();
     });
     process.once("SIGTERM", () => {
       void shutdown();
     });
-    if (command === "http") {
+    if (command === "tunnel") {
+      closeTransport = (await serveTunnel(reader)).close;
+    } else if (command === "http") {
       const http = await serveHttp(reader);
       closeTransport = http.close;
       console.error(`x-reader listening on ${http.url}; loopback access only.`);
@@ -79,7 +86,7 @@ try {
   } else
     throw new ReaderError(
       "unknown_command",
-      "Use login, diagnostics, http, stdio, clear-cache or reset-profile.",
+      "Use login, diagnostics, http, stdio, tunnel, clear-cache or reset-profile.",
     );
 } catch (error) {
   logFailure(error);
