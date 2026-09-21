@@ -10,6 +10,9 @@ import { Reader } from "./reader.js";
 import { config } from "./config.js";
 import { logFailure, ReaderError } from "./errors.js";
 
+// Transport sessions expire independently of cached X content and cursors.
+const SESSION_IDLE_MS = 10 * 60 * 1000;
+
 export function validHttpBoundary(
   request: Pick<IncomingMessage, "headers" | "socket">,
   port: number,
@@ -88,10 +91,6 @@ export async function serveHttp(reader: Reader, port = config.port) {
         request.method === "POST" &&
         isInitializeRequest(body)
       ) {
-        if (sessions.size >= 8) {
-          response.writeHead(503).end("Too many local MCP sessions");
-          return;
-        }
         const signals = new Map<RequestId, AbortController>();
         const mcp = createMcpServer(reader, signals);
         const transport = new StreamableHTTPServerTransport({
@@ -119,6 +118,7 @@ export async function serveHttp(reader: Reader, port = config.port) {
       response.once("close", () => {
         if (!response.writableEnded) controller.abort();
         if (requestId !== undefined) selected.signals.delete(requestId);
+        selected.touched = Date.now();
       });
       await connection.transport.handleRequest(request, response, body);
     } catch (error) {
@@ -134,10 +134,10 @@ export async function serveHttp(reader: Reader, port = config.port) {
     for (const [id, session] of sessions) {
       if (
         !session.signals.size &&
-        Date.now() - session.touched > config.cacheMs
+        Date.now() - session.touched > SESSION_IDLE_MS
       ) {
         sessions.delete(id);
-        void session.mcp.close();
+        void session.mcp.close().catch(logFailure);
       }
     }
   }, 30000);

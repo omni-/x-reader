@@ -152,6 +152,83 @@ test("official MCP HTTP client exercises the same stack, Host/Origin guards and 
   }
 });
 
+test("MCP HTTP accepts many simultaneous sessions and keeps each usable", async () => {
+  const http = await serveHttp(new Reader(new FixtureBrowser()), 0);
+  const clients = Array.from({ length: 32 }, (_, index) => ({
+    client: new Client({ name: `http-session-${index}`, version: "1" }),
+    transport: new StreamableHTTPClientTransport(new URL(http.url)),
+  }));
+  try {
+    const connections = await Promise.allSettled(
+      clients.map(({ client, transport }) => client.connect(transport)),
+    );
+    assert.ok(connections.every((result) => result.status === "fulfilled"));
+    assert.equal(
+      new Set(clients.map(({ transport }) => transport.sessionId)).size,
+      32,
+    );
+    for (const { client } of clients) {
+      assert.equal((await client.listTools()).tools.length, 6);
+    }
+    await Promise.all(
+      clients.map(({ transport }) => transport.terminateSession()),
+    );
+  } finally {
+    await Promise.all(clients.map(({ client }) => client.close()));
+    await http.close();
+  }
+});
+
+test("MCP HTTP expires abandoned sessions while retaining recently used sessions", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: Date.now() });
+  const http = await serveHttp(new Reader(new FixtureBrowser()), 0);
+  const send = (body, session) =>
+    fetch(http.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        ...(session ? { "mcp-session-id": session } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  const initialize = async () => {
+    const response = await send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "idle-test", version: "1" },
+      },
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+    return response.headers.get("mcp-session-id");
+  };
+  const list = { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} };
+  try {
+    const abandoned = await initialize();
+    const active = await initialize();
+    t.mock.timers.tick(9 * 60 * 1000);
+    const used = await send(list, active);
+    assert.equal(used.status, 200);
+    await used.json();
+
+    t.mock.timers.tick(2 * 60 * 1000);
+    const expired = await send(list, abandoned);
+    assert.equal(expired.status, 404);
+    assert.match(await expired.text(), /session expired/);
+    const retained = await send(list, active);
+    assert.equal(retained.status, 200);
+    assert.equal((await retained.json()).result.tools.length, 6);
+  } finally {
+    await http.close();
+    t.mock.timers.reset();
+  }
+});
+
 test("MCP HTTP cancellation stops an active browser request", async () => {
   let entered, closed;
   const opened = new Promise((resolve) => {
