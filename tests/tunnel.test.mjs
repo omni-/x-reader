@@ -20,6 +20,7 @@ test("bundled startup diagnoses prerequisites and closes HTTP when its child exi
             ...process.env,
             CONTROL_PLANE_API_KEY: "",
             OPENAI_API_KEY: "",
+            X_READER_LOG_FORMAT: "text",
             ...env,
           },
           timeout: 10000,
@@ -48,7 +49,11 @@ test("bundled startup diagnoses prerequisites and closes HTTP when its child exi
     assert.match((await run({})).stderr, /tunnel_credentials_missing/);
     await writeFile(
       join(project, "run"),
-      "console.log(JSON.stringify(process.argv.slice(2))); setTimeout(() => process.exit(7), 200);",
+      `console.log(JSON.stringify({ level: "INFO", msg: "noisy startup internals" }));
+console.log(JSON.stringify({ level: "WARN", msg: "upstream unavailable", error: "connection refused", client_instance_id: "hidden-instance" }));
+console.error("configure tunnel-client: missing profile");
+console.error(process.argv.slice(2).join(" "));
+setTimeout(() => { process.stderr.write("last diagnostic without newline"); process.exitCode = 7; }, 200);`,
     );
     const probe = createServer();
     await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -59,8 +64,26 @@ test("bundled startup diagnoses prerequisites and closes HTTP when its child exi
       X_READER_PORT: String(port),
     });
     assert.equal(result.code, 7);
-    assert.match(result.stderr, /tunnel_stopped/);
-    assert.match(result.stdout, new RegExp(`url=http://127.0.0.1:${port}/mcp`));
+    assert.match(result.stderr, /Tunnel exited/);
+    assert.match(result.stderr, new RegExp(`url=http://127.0.0.1:${port}/mcp`));
+    assert.match(
+      result.stderr,
+      /\[WARN\]\[\d{2}:\d{2}:\d{2}\] Tunnel: upstream unavailable \(error=connection refused\)/,
+    );
+    assert.match(
+      result.stderr,
+      /Tunnel: configure tunnel-client: missing profile/,
+    );
+    assert.match(result.stderr, /last diagnostic without newline/);
+    assert.match(
+      result.stderr,
+      /--log.format json --log.level warn --log.file stdout/,
+    );
+    assert.doesNotMatch(
+      result.stderr,
+      /noisy startup internals|hidden-instance/,
+    );
+    assert.equal(result.stdout, "");
     await assert.rejects(fetch(`http://127.0.0.1:${port}/mcp`));
   } finally {
     assert.ok(!relative(LOCAL, project).startsWith("..") && project !== LOCAL);

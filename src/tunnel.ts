@@ -1,8 +1,9 @@
 import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { LOCAL } from "./config.js";
-import { ReaderError } from "./errors.js";
+import { logEvent, ReaderError } from "./errors.js";
 import { serveHttp } from "./http.js";
 import type { Reader } from "./reader.js";
 
@@ -37,9 +38,40 @@ export async function serveTunnel(reader: Reader) {
         `url=${http.url}`,
         "--health.listen-addr",
         "127.0.0.1:0",
+        "--log.format",
+        "json",
+        "--log.level",
+        "warn",
+        "--log.file",
+        "stdout",
       ],
-      { stdio: "inherit", windowsHide: true, shell: false },
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false },
     );
+    for (const stream of [child.stdout!, child.stderr!]) {
+      const lines = createInterface({ input: stream });
+      lines.on("line", (line) => {
+        if (!line.trim()) return;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          logEvent({ level: "warn", message: `Tunnel: ${line}` });
+          return;
+        }
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          logEvent({ level: "warn", message: `Tunnel: ${line}` });
+          return;
+        }
+        const level = String(entry.level ?? "warn").toLowerCase();
+        if (!["warn", "error", "fatal"].includes(level)) return;
+        logEvent({
+          level: level === "fatal" ? "error" : level,
+          message: `Tunnel: ${entry.msg ?? entry.message ?? "Diagnostic"}`,
+          error: entry.error ?? entry.attrs?.error,
+          status: entry.status_code ?? entry.attrs?.status_code,
+        });
+      });
+    }
     await new Promise<void>((resolve, reject) => {
       child!.once("spawn", resolve);
       child!.once("error", () =>
@@ -56,7 +88,7 @@ export async function serveTunnel(reader: Reader) {
     throw error;
   }
   const exited = new Promise<number | null>((resolve) =>
-    child.once("exit", resolve),
+    child.once("close", resolve),
   );
   let closing: Promise<void> | undefined;
   const close = () =>
@@ -67,21 +99,20 @@ export async function serveTunnel(reader: Reader) {
     })());
   void exited.then(async (code) => {
     if (!closing) {
-      console.error(
-        JSON.stringify({
-          level: "warn",
-          event: "tunnel_stopped",
-          code,
-          message:
-            "Tunnel exited; stopping the local server. Check tunnel-client diagnostics and restart npm start.",
-        }),
-      );
+      logEvent({
+        level: "warn",
+        event: "tunnel_stopped",
+        code,
+        message:
+          "Tunnel exited; stopping the local server. Check tunnel-client diagnostics and restart npm start.",
+      });
       process.exitCode = code || 1;
       await close();
     }
   });
-  console.error(
-    `x-reader listening on ${http.url}; secure tunnel started. Ctrl+C stops both.`,
-  );
+  logEvent({
+    level: "info",
+    message: `x-reader listening on ${http.url}; tunnel starting. Ctrl+C stops both.`,
+  });
   return { close };
 }

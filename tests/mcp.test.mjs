@@ -29,7 +29,7 @@ async function exercise(client) {
       openWorldHint: true,
     });
   const args = {
-    url: "https://x.com/root/status/100",
+    url: "https://x.com/root/status/100?token=PRIVATE_URL_TOKEN#fragment",
     max_posts: 2,
     max_depth: 2,
   };
@@ -58,6 +58,10 @@ async function exercise(client) {
   });
   assert.equal(media.content[0].type, "image");
   assert.equal(media.content[0].mimeType, "image/png");
+  await client.callTool({
+    name: "search_x",
+    arguments: { query: "from:alice cats", sort: "latest", limit: 5 },
+  });
   for (const call of [
     { name: "navigate", arguments: { url: "https://evil.test" } },
     { name: "get_post", arguments: { url: "https://x.com/messages" } },
@@ -79,6 +83,7 @@ test("official MCP client exercises stdio schemas, retrieval, continuation and P
     command: process.execPath,
     args: [fileURLToPath(new URL("./mcp-fixture-server.mjs", import.meta.url))],
     stderr: "pipe",
+    env: { ...process.env, X_READER_LOG_FORMAT: "json" },
   });
   let logs = "";
   transport.stderr.on("data", (chunk) => {
@@ -97,6 +102,16 @@ test("official MCP client exercises stdio schemas, retrieval, continuation and P
     .map((line) => JSON.parse(line));
   const started = events.filter((event) => event.event === "request_started");
   assert.ok(started.length > 0);
+  const threadStart = started.find((event) => event.tool === "get_thread");
+  assert.equal(threadStart.url, "https://x.com/root/status/100");
+  assert.equal(threadStart.max_posts, 2);
+  assert.equal(threadStart.max_depth, 2);
+  const searchStart = started.find((event) => event.tool === "search_x");
+  assert.equal(searchStart.query, "from:alice cats");
+  assert.equal(searchStart.sort, "latest");
+  assert.equal(searchStart.limit, 5);
+  assert.ok(started.some((event) => event.continuation === true));
+  assert.doesNotMatch(logs, /PRIVATE_URL_TOKEN|fragment/);
   for (const start of started) {
     assert.ok(
       events.some(

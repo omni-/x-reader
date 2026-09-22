@@ -7,6 +7,7 @@ import type {
 import { z } from "zod";
 import { Reader } from "./reader.js";
 import {
+  postUrl,
   getPostInput,
   threadInput,
   searchInput,
@@ -47,12 +48,30 @@ export function createMcpServer(
   };
   const guarded = async (
     tool: string,
+    args: Record<string, unknown>,
     operation: () => Promise<CallToolResult>,
   ): Promise<CallToolResult> => {
+    const request = {
+      ...(typeof args.query === "string" ? { query: args.query } : {}),
+      ...(typeof args.url === "string" ? { url: postUrl(args.url).url } : {}),
+      ...(typeof args.username === "string" ? { username: args.username } : {}),
+      ...(typeof args.media_id === "string" ? { media_id: args.media_id } : {}),
+      ...(args.sort !== undefined ? { sort: args.sort } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.max_posts !== undefined ? { max_posts: args.max_posts } : {}),
+      ...(args.max_depth !== undefined ? { max_depth: args.max_depth } : {}),
+      ...(args.cursor ? { continuation: true } : {}),
+    };
     const request_id = randomUUID();
     return requestContext.run(request_id, async () => {
       const started = Date.now();
-      logEvent({ level: "info", event: "request_started", request_id, tool });
+      logEvent({
+        level: "info",
+        event: "request_started",
+        request_id,
+        tool,
+        ...request,
+      });
       try {
         const value = await operation();
         const data = value.structuredContent?.data as ReadResult | undefined;
@@ -75,6 +94,7 @@ export function createMcpServer(
           event: "request_finished",
           request_id,
           tool,
+          ...request,
           duration_ms: Date.now() - started,
           posts: data?.posts?.length,
           stop_reason: data?.report?.stop_reason,
@@ -87,6 +107,7 @@ export function createMcpServer(
           event: "request_failed",
           request_id,
           tool,
+          ...request,
           duration_ms: Date.now() - started,
           ...publicError(error),
         });
@@ -119,7 +140,7 @@ export function createMcpServer(
       annotations,
     },
     (args, extra) =>
-      guarded("get_post", async () =>
+      guarded("get_post", args, async () =>
         result(
           await reader.getPost(
             args,
@@ -139,7 +160,7 @@ export function createMcpServer(
       annotations,
     },
     (args, extra) =>
-      guarded("get_thread", async () =>
+      guarded("get_thread", args, async () =>
         result(
           await reader.getThread(
             args,
@@ -159,7 +180,7 @@ export function createMcpServer(
       annotations,
     },
     (args, extra) =>
-      guarded("search_x", async () =>
+      guarded("search_x", args, async () =>
         result(
           await reader.search(
             args,
@@ -179,7 +200,7 @@ export function createMcpServer(
       annotations,
     },
     (args, extra) =>
-      guarded("get_user_posts", async () =>
+      guarded("get_user_posts", args, async () =>
         result(
           await reader.userPosts(
             args,
@@ -199,7 +220,7 @@ export function createMcpServer(
       annotations,
     },
     (_args, extra) =>
-      guarded("get_status", async () => {
+      guarded("get_status", {}, async () => {
         const status = await reader.status(
           activeSignal(extra.signal, extra.requestId),
         );
@@ -234,7 +255,7 @@ export function createMcpServer(
       annotations,
     },
     (args, extra) =>
-      guarded("read_media", async () => {
+      guarded("read_media", args, async () => {
         const media = await reader.readMedia(
           args.media_id,
           activeSignal(extra.signal, extra.requestId),
