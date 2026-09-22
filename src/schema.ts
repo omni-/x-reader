@@ -7,7 +7,47 @@ export const mediaSchema = z.object({
   alt_text: z.string().nullable(),
   limitation: z.string().nullable(),
 });
+const authorSchema = z.object({
+  username: z.string().nullable(),
+  display_name: z.string().nullable(),
+});
+const linkSchema = z.object({
+  url: z.string(),
+  display: z.string().nullable(),
+});
+export const articleSchema = z.object({
+  title: z.string().nullable(),
+  author: authorSchema,
+  text: z.string().nullable(),
+  blocks: z.array(
+    z.object({
+      type: z.enum([
+        "paragraph",
+        "heading",
+        "list_item",
+        "blockquote",
+        "code",
+        "table",
+        "separator",
+        "media",
+        "embed",
+      ]),
+      text: z.string().nullable(),
+      level: z.number().int().optional(),
+      ordered: z.boolean().optional(),
+      media_indexes: z.array(z.number().int()).optional(),
+      rows: z.array(z.array(z.string())).optional(),
+    }),
+  ),
+  links: z.array(linkSchema),
+  media: z.array(mediaSchema),
+  source: z.literal("rendered_dom"),
+  truncated: z.boolean(),
+  limitations: z.array(z.string()),
+});
+export type Article = z.infer<typeof articleSchema>;
 export const quoteSchema = z.object({
+  article: articleSchema.optional(),
   id: z.string().nullable(),
   url: z.string().nullable(),
   author: z.object({
@@ -25,6 +65,7 @@ export const quoteSchema = z.object({
   media: z.array(mediaSchema),
 });
 export const postSchema = z.object({
+  article: articleSchema.optional(),
   article_preview: z
     .object({
       title: z.string().nullable(),
@@ -115,7 +156,19 @@ export const reportSchema = z.object({
   limitations: z.array(z.string()),
 });
 export type Report = z.infer<typeof reportSchema>;
+export const mediaContentSchema = z.object({
+  media_id: z.string(),
+  post_url: z.string(),
+  status: z.enum(["provided_to_client", "unavailable", "deferred"]),
+  content_index: z.number().int().nullable(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  source: z.enum(["cdn_image", "rendered_crop"]).nullable(),
+  server_analysis: z.literal(false),
+  limitations: z.array(z.string()),
+});
 export const resultSchema = z.object({
+  media_content: z.array(mediaContentSchema).optional(),
   search: z
     .object({ query: z.string(), sort: z.enum(["latest", "top"]) })
     .optional(),
@@ -126,6 +179,7 @@ export const resultSchema = z.object({
 });
 export type ReadResult = z.infer<typeof resultSchema>;
 export const statusSchema = z.object({
+  client_sampling_available: z.boolean().optional(),
   ready: z.boolean(),
   state: z.string(),
   checked_at: z.string(),

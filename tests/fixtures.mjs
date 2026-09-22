@@ -5,6 +5,8 @@ export const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9c8AAAAASUVORK5CYII=",
   "base64",
 );
+export const textImage = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"><rect width="800" height="1100" fill="white"/><g fill="black" font-family="sans-serif" font-size="30"><text x="50" y="70">COMMUNITY WORKSHOP</text><text x="50" y="150">Saturday, October 3</text><text x="50" y="240">Morning</text><text x="440" y="240">Afternoon</text><text x="50" y="300">09:00 Registration</text><text x="440" y="300">13:00 Practice</text><text x="50" y="360">10:00 Introduction</text><text x="440" y="360">15:00 Questions</text><text x="50" y="1000">Bring a notebook.</text></g></svg>`;
+export const ordinaryImage = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="skyblue"/><circle cx="520" cy="80" r="45" fill="gold"/><path d="M0 320 170 120 330 320 440 180 640 320Z" fill="forestgreen"/><path d="M0 320H640V480H0Z" fill="steelblue"/></svg>`;
 const escape = (value) =>
   String(value)
     .replaceAll("&", "&amp;")
@@ -13,7 +15,7 @@ const escape = (value) =>
     .replaceAll('"', "&quot;");
 export function card(id, handle, text, options = {}) {
   const media = options.image
-    ? `<div data-testid="tweetPhoto"><img width="96" height="72" alt="Synthetic chart" src="https://pbs.twimg.com/media/fixture?format=png&name=small"></div>`
+    ? `<div data-testid="tweetPhoto"><img width="96" height="72" style="object-fit:cover" alt="${options.image === true ? "Synthetic chart" : "Image"}" src="https://pbs.twimg.com/media/${options.image === true ? "fixture" : options.image}?format=png&name=small"></div>`
     : "";
   const quote = options.quote
     ? `<span>Quote</span><div role="link"><div data-testid="User-Name"><span>Quoted Author</span><span>@quoter</span></div><time datetime="2026-09-01T00:00:00Z"></time><div data-testid="tweetText">This is quoted evidence.</div><a href="/quoter/status/900/photo/1"><div data-testid="tweetPhoto"><img width="96" height="72" alt="Quoted screenshot" src="https://pbs.twimg.com/media/quote_fixture?format=png&name=small"></div></a></div>`
@@ -46,9 +48,68 @@ export function wrap(
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body{margin:0}main{max-width:650px}article{padding:12px;border:1px solid #ccc;min-height:110px}[data-testid=tweetText]{white-space:pre-wrap}button{min-width:12px;min-height:12px}img{object-fit:fill}#space{height:900px}</style></head><body>${auth ? '<button data-testid="SideNav_AccountSwitcher_Button">Account</button>' : '<a href="/i/flow/login">Log in</a>'}<main data-testid="primaryColumn">${selected ? `<a role="tab" aria-selected="true">${selected}</a>` : ""}${ui}<section aria-label="${timeline}"><h2>Conversation</h2><button>Relevant</button>${content}</section></main><script>${script}</script></body></html>`;
 }
 
+// Reduced, synthetic reproduction of the inspected nested X Article markup.
+// The long body catches the old 16K post-text cap without storing the source article.
+export function articleCard(id = "2101034933284417614") {
+  const paragraphs = Array.from(
+    { length: 90 },
+    (_, index) =>
+      `<div class="longform-unstyled" data-block="true"><div><span data-text="true">Paragraph ${index + 1}. ${"Rendered Article text stays separate from post text and image interpretation. ".repeat(4)}</span></div></div>`,
+  ).join("");
+  const images = Array.from(
+    { length: 7 },
+    (_, index) =>
+      `<section data-block="true"><div data-testid="tweetPhoto"><img width="96" height="72" alt="Image" src="https://pbs.twimg.com/media/article_${index}?format=png&amp;name=small"></div></section>`,
+  ).join("");
+  const content = `<article data-testid="twitterArticleReadView">
+    <div data-testid="twitter-article-title">The Inference Gap</div>
+    <button>16 replies</button>
+    <div data-testid="twitterArticleRichTextView"><div data-testid="longformRichTextComponent"><div data-contents="true">
+    <div data-block="true">Access to frontier models no longer guarantees access to the inference regime that can reliably reproduce frontier model capabilities.</div>
+    <section data-block="true"><div role="separator"></div></section>
+    <h1 data-block="true">What was measured</h1>
+    <div data-block="true">First line<br>second line <img alt="🚀" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E"></div>
+    <ol><li data-block="true">First finding</li><li data-block="true">Second finding</li></ol>
+    <blockquote data-block="true">A quoted passage.</blockquote>
+    <pre data-block="true">const reading = true;</pre>
+    <div data-block="true"><a href="https://example.org/source">Evidence</a> and <a href="/writer/status/123">related post</a><a href="javascript:alert(1)">unsafe</a></div>
+    ${paragraphs}${images}
+    <h2 data-block="true">Conclusion</h2><div data-block="true">The final paragraph is present.</div>
+    </div></div></div>
+    <a href="/i/premium_sign_up">Upgrade to Premium</a>
+    </article>`;
+  return card(id, "Lon", null, { display: "Lon Lundgren" }).replace(
+    "</article>",
+    `${content}</article>`,
+  );
+}
+
 export function fixtureHtml(url) {
   const target = new URL(url);
   const id = /\/status\/(\d+)/.exec(target.pathname)?.[1];
+  if (id === "2101034933284417614") return wrap(articleCard());
+  if (id === "910")
+    return wrap(
+      card(id, "text_image", "Workshop handout", { image: "text_image" }),
+    );
+  if (id === "920")
+    return wrap(card(id, "scene", null, { image: "ordinary_image" }));
+  if (id === "930")
+    return wrap(
+      card(id, "broken", "The source text remains available", {
+        image: "broken_image",
+      }),
+    );
+  if (id === "940")
+    return wrap(
+      Array.from({ length: 5 }, (_, index) =>
+        card(String(940 + index), "scene", "Image reply", {
+          image: "ordinary_image",
+        }),
+      ).join("") + "<h2>Discover more</h2>",
+    );
+  if (/^94[1-4]$/.test(id ?? ""))
+    return wrap(card(id, "scene", "Image reply", { image: "ordinary_image" }));
   if (id === "666") return wrap("", { auth: false });
   if (id === "667") return wrap("", { ui: "<div>Rate limit exceeded</div>" });
   if (id === "668") return wrap("", { ui: "<div>Verify you are human</div>" });
@@ -199,7 +260,20 @@ export class FixtureBrowser {
     await page.route("**/*", async (route) => {
       const url = route.request().url();
       if (url.startsWith("https://pbs.twimg.com/media/")) {
-        await route.fulfill({ body: PNG, contentType: "image/png" });
+        if (url.includes("broken_image")) {
+          await route.fulfill({ status: 404, body: "Missing image" });
+          return;
+        }
+        const svg = url.includes("text_image")
+          ? textImage
+          : url.includes("ordinary_image")
+            ? ordinaryImage
+            : null;
+        await route.fulfill({
+          body: svg ?? PNG,
+          contentType: svg ? "image/svg+xml" : "image/png",
+          headers: { "Access-Control-Allow-Origin": "*" },
+        });
         return;
       }
       if (!url.startsWith("https://x.com/")) {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { BrowserSession, checkSignal } from "./browser.js";
 import { config, LOCAL } from "./config.js";
 import { ExpiringStore } from "./cache.js";
-import { ReaderError } from "./errors.js";
+import { ReaderError, publicError, logEvent } from "./errors.js";
 import { collectPage, screenshotMedia } from "./dom.js";
 import {
   postUrl,
@@ -38,6 +38,18 @@ type Traversal = {
   terminal: boolean;
 };
 export type MediaRef = { post_url: string; post_id: string; src: string };
+export type MediaImage = {
+  data: string;
+  mimeType: "image/png";
+  post_url: string;
+  width: number;
+  height: number;
+  source: "cdn_image" | "rendered_crop";
+  limitations: string[];
+};
+type MediaResult =
+  | { media_id: string; image: MediaImage }
+  | { media_id: string; error: { code: string; message: string } };
 const clearMarker = join(LOCAL, "cache-generation");
 const blockedReasons = new Set([
   "login_required",
@@ -80,7 +92,7 @@ function initial(focalId: string | null, maxDepth: number): Traversal {
         "Null parent IDs are unknown. Adjacency, mentions and conversation membership do not establish an exact parent.",
         "Traversal depth counts page-expansion hops from the focal post, not proven reply-chain depth. The UI does not always identify the conversation root.",
         "Quoted posts are separate source material, not replies. Quote-posts elsewhere are not enumerated.",
-        "Image URLs and alt text do not mean the image was read. Use read_media for image pixels. Videos are metadata-only.",
+        "Image interpretation belongs to the calling model and must remain separate from post/Article text. Check media_content for supplied pixels and limitations; read_media retrieves deferred images. Videos are metadata-only.",
       ],
     },
   };
@@ -144,6 +156,16 @@ export class Reader {
           existing.text = post.text;
           existing.truncated = post.truncated;
         }
+        if (
+          post.article &&
+          (!existing.article ||
+            (post.article.text?.length ?? 0) >
+              (existing.article.text?.length ?? 0) ||
+            (existing.article.truncated && !post.article.truncated))
+        ) {
+          existing.article = post.article;
+          this.rememberMedia(post);
+        }
         if (!existing.parent_id && post.parent_id) {
           existing.parent_id = post.parent_id;
           existing.parent_evidence = post.parent_evidence;
@@ -151,17 +173,7 @@ export class Reader {
       }
       return;
     }
-    for (const item of [
-      ...post.media,
-      ...post.quoted_posts.flatMap((quote) => quote.media),
-    ]) {
-      if (item.type === "image" && item.url && allowedImage(item.url))
-        item.media_id = this.media.put(post.id, {
-          post_url: post.url,
-          post_id: post.id,
-          src: item.url,
-        }).id;
-    }
+    this.rememberMedia(post);
     state.posts.set(post.id, post);
     state.pending.push(post);
     state.report.depth_reached = Math.max(
@@ -173,6 +185,29 @@ export class Reader {
       !state.report.ancestor_context_ids.includes(post.id)
     )
       state.report.ancestor_context_ids.push(post.id);
+  }
+
+  private rememberMedia(post: Post): void {
+    for (const item of [
+      ...post.media,
+      ...(post.article?.media ?? []),
+      ...post.quoted_posts.flatMap((quote) => [
+        ...quote.media,
+        ...(quote.article?.media ?? []),
+      ]),
+    ]) {
+      if (
+        item.type === "image" &&
+        item.url &&
+        allowedImage(item.url) &&
+        !item.media_id
+      )
+        item.media_id = this.media.put(post.id, {
+          post_url: post.url,
+          post_id: post.id,
+          src: item.url,
+        }).id;
+    }
   }
 
   private schedule(state: Traversal, post: Post): void {
@@ -465,29 +500,67 @@ export class Reader {
     );
   }
 
-  async readMedia(
-    id: string,
+  async readMedia(id: string, signal?: AbortSignal): Promise<MediaImage> {
+    const result = (await this.readMediaBatch([id], signal))[0]!;
+    if ("error" in result)
+      throw new ReaderError(result.error.code, result.error.message);
+    return result.image;
+  }
+
+  async readMediaBatch(
+    ids: string[],
     signal?: AbortSignal,
-  ): Promise<{ data: string; mimeType: "image/png"; post_url: string }> {
+  ): Promise<MediaResult[]> {
     await this.syncCache();
-    const { value } = this.media.get(z.string().uuid().parse(id));
-    if (!allowedImage(value.src))
-      throw new ReaderError(
-        "media_refused",
-        "Only images discovered on retrieved public posts can be read.",
-      );
     return this.browser.run(async (page, active) => {
-      const bytes = await screenshotMedia(page, value, active);
-      if (bytes.length > 4 * 1024 * 1024)
-        throw new ReaderError(
-          "media_too_large",
-          "Rendered image exceeds the 4 MiB response limit.",
-        );
-      return {
-        data: bytes.toString("base64"),
-        mimeType: "image/png",
-        post_url: value.post_url,
-      };
+      const results: MediaResult[] = [];
+      for (const id of ids.slice(0, 4)) {
+        checkSignal(active);
+        try {
+          const { value } = this.media.get(z.string().uuid().parse(id));
+          if (!allowedImage(value.src))
+            throw new ReaderError(
+              "media_refused",
+              "Only images discovered on retrieved public posts can be read.",
+            );
+          const { bytes, ...capture } = await screenshotMedia(
+            page,
+            value,
+            active,
+          );
+          if (bytes.length > 4 * 1024 * 1024)
+            throw new ReaderError(
+              "media_too_large",
+              "Image exceeds the 4 MiB response limit.",
+            );
+          results.push({
+            media_id: id,
+            image: {
+              ...capture,
+              data: bytes.toString("base64"),
+              mimeType: "image/png",
+              post_url: value.post_url,
+            },
+          });
+        } catch (error) {
+          checkSignal(active);
+          const failure = publicError(error);
+          logEvent({
+            level: failure.code === "internal_error" ? "error" : "warn",
+            event: "media_unavailable",
+            media_id: id,
+            ...failure,
+          });
+          results.push({ media_id: id, error: failure });
+          if (error instanceof ReaderError && blockedReasons.has(error.code)) {
+            this.browser.latch(stopFrom(error));
+            for (const remaining of ids.slice(results.length, 4))
+              results.push({ media_id: remaining, error: failure });
+            break;
+          }
+        }
+      }
+      return results;
     }, signal);
   }
 }

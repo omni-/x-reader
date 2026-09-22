@@ -20,6 +20,7 @@
     "clear-cache": "node dist/cli.js clear-cache",
     "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
     "test:live": "npm run build && node scripts/live-test.mjs",
+    "test:rich-live": "npm run build && node scripts/rich-content-live.mjs",
     "check": "tsc --noEmit && prettier --check src tests scripts README.md VERIFICATION.md package.json tsconfig.json",
     "format": "prettier --write src tests scripts README.md VERIFICATION.md package.json tsconfig.json"
   },
