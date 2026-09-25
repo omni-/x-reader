@@ -1,5 +1,7 @@
 # Verification
 
+Current image fallback and video verification is recorded in [the September 25 task notes](docs/task-notes/media-video.md), including transport checks, model-visible pixel evidence and the unverified ChatGPT wrapper. The records below describe earlier versions.
+
 ## Search hardening — September 20, 2026 UTC
 
 The working tree was clean before this task. This section records the new checks; the earlier implementation record below is historical.

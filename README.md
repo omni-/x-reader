@@ -84,14 +84,15 @@ The recorded verification does not include authenticated tunnel checks or a Chat
 
 ## Tools and evidence
 
-| Tool             | Input                                                                      |
-| ---------------- | -------------------------------------------------------------------------- |
-| `get_post`       | `url`                                                                      |
-| `get_thread`     | `url`, `max_posts=40` (1–100), `max_depth=2` (0–3), optional `cursor`      |
-| `search_x`       | `query`, `limit=20` (1–100), `sort="latest"` or `"top"`, optional `cursor` |
-| `get_user_posts` | `username`, `limit=20` (1–100), optional `cursor`                          |
-| `get_status`     | No arguments                                                               |
-| `read_media`     | A `media_id` returned by a retrieved post                                  |
+| Tool             | Input                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_post`       | `url`                                                                                                                                               |
+| `get_thread`     | `url`, `max_posts=40` (1–100), `max_depth=2` (0–3), optional `cursor`                                                                               |
+| `search_x`       | `query`, `limit=20` (1–100), `sort="latest"` or `"top"`, optional `cursor`                                                                          |
+| `get_user_posts` | `username`, `limit=20` (1–100), optional `cursor`                                                                                                   |
+| `get_status`     | No arguments                                                                                                                                        |
+| `read_media`     | Image or frame `media_id`, optional `structured_fallback=false`                                                                                     |
+| `read_video`     | Video `media_id`; optional range, `timestamps`, `frame_count=8` (1–12), `max_frame_dimension=1280`, `transcribe=false`, `structured_fallback=false` |
 
 Search results include `search: { query, sort }` using the exact submitted text, including native X operators and whitespace. A confirmed empty website state returns `posts: []` with `stop_reason: "empty_results"`; authentication, rate-limit, navigation and extraction failures never count as confirmed empty results.
 
@@ -99,9 +100,32 @@ Results live in `structuredContent.data`; failures use `isError=true` and `struc
 
 When the client exposes the pixels to its model, the model transcribes text-heavy images in reading order, describes ordinary images concisely, and reports unreadable areas. Keep that image-derived content separate from post and Article text. `server_analysis: false` means the server performed no interpretation. This approach requires no MCP sampling or model API key. `get_status.client_sampling_available` reports the connected client's advertised capability; the currently tested ChatGPT tunnel client does not advertise sampling.
 
-`status: "provided_to_client"` means x-reader included an MCP image block in its response; it does **not** confirm that the consuming model received or inspected the pixels. The pixels are in `result.content`, while `structuredContent.data` contains only their metadata. Code wrappers must forward the image blocks through their image-output helper; serializing either object as text does not provide vision input. The tested Codex `functions.exec` path supports `image(block)`. The user-reported ChatGPT path exposes only `text()` and cannot complete that forwarding step. See the [verification notes](docs/task-notes/rich-content-extraction.md) for the evidence and working forwarding example.
+`status: "provided_to_client"` means x-reader included an MCP image block; it does **not** confirm model vision. By default, pixels are in `result.content` and `structuredContent.data` contains metadata. With `structured_fallback: true`, `read_media` and `read_video` also return identical pixels in `structuredContent.data.data_url`. This is opt-in for clients that drop MCP content blocks. The receiving client must submit that URL through its documented image-input interface. Do not print base64, assume an `image()` helper exists, or count a returned URL as vision verification. The reported ChatGPT wrapper remains unverified; [exact retest calls and separate server, transport and vision results](docs/task-notes/media-video.md) are available.
 
-`read_media` retrieves a deferred attachment or Article figure using its short-lived `media_id`, never a caller-supplied URL or filename. It verifies the attachment on the public post, loads X's larger image variant, and returns the full frame as PNG (up to 4 MiB, 2048px per side and 4 million pixels). If that fails, it reports a rendered-crop fallback. X's large variant may be smaller than the uploaded original; resizing and capture failures are explicit. Videos remain metadata-only.
+`read_media` retrieves a deferred attachment, Article figure or decoded video frame using its short-lived `media_id`, never a caller-supplied URL or filename. It verifies the attachment on the public post and returns PNG pixels (up to 4 MiB, 2048px per side and 4 million pixels). Still images use X's larger variant; a failed full-image capture can return an explicitly labeled rendered crop. X's variant may be smaller than the upload. The complete encoded response, including both copies when compatibility is enabled, is limited to 12 MiB. Oversized responses fail with an actionable error, never truncated base64.
+
+`read_video` resolves playback in the authenticated browser, then decodes local files with FFmpeg. It defaults to eight evenly spaced frame samples in a timestamp-labeled contact sheet. Use `start_seconds`/`end_seconds` for a range up to 600 seconds (the default stops at 600 seconds on longer videos), or `timestamps: [1.5, 7]` for exact sampling requests. `frame_count` is the maximum, including explicit timestamps; `max_frame_dimension` accepts 128–2048. Actual presentation timestamps can differ from requested times. `frames[].media_id` retrieves that frame at up to 2048px through `read_media`, including its compatibility fallback. Frame IDs inherit the original video's expiration. Posters are never returned as decoded frames.
+
+Results include duration, requested range, sampled endpoints, source captions with timestamped cues, audio availability and a separate generated-transcript field. `coverage.fraction` describes the requested range's share of the duration, not the fraction of motion inspected; `complete` is always false. Sparse samples can miss events. Missing captions do not imply missing audio. Optional local speech transcription requires `transcribe: true` and operator configuration below.
+
+Video downloads are limited to 64 MiB total and 192 resources; playlists/caption resources to 1 MiB each. Every HLS URI is checked, including unselected variants. Only HTTPS `video.twimg.com` resources are downloaded, without cookies; redirects are refused. HLS is rewritten to generated local filenames before decoding with network protocols disabled. Source frames are limited to 16 million pixels, returned frames to 4 million. Each local process has a 20-second deadline within the existing browser request deadline. Cancellation kills and reaps subprocesses before deleting temporary files. Finite MP4/WebM and unencrypted HLS are supported; live, encrypted, discontinuous and byte-range HLS, and external broadcasts, report explicit limitations. A short time range still requires a bounded download of the selected variant.
+
+## Local video setup
+
+Install FFmpeg and ffprobe with H.264, PNG and HLS support, and put both on PATH, or set absolute executable paths before starting the server:
+
+```powershell
+$env:X_READER_FFMPEG = 'C:\tools\ffmpeg\bin\ffmpeg.exe'
+$env:X_READER_FFPROBE = 'C:\tools\ffmpeg\bin\ffprobe.exe'
+npm run build
+node dist/cli.js stdio
+```
+
+Still images and Article extraction do not require these binaries. Missing video dependencies return setup instructions. x-reader downloads no binaries or models automatically. Restart the serving process after building and refresh the client's tool schemas to discover `read_video` and the new flags.
+
+To use an existing local speech recognizer, set `X_READER_TRANSCRIBER` to an executable and optionally `X_READER_TRANSCRIBER_ARGS` to a JSON array of fixed arguments (for example, a local adapter script). The server appends a temporary 16 kHz mono WAV filename. The adapter must emit only a JSON array of `{ "start_seconds": 0.1, "end_seconds": 1.2, "text": "..." }` to stdout, relative to that WAV; x-reader offsets cues to the video range. Configure a trusted local recognizer and an already installed model; the adapter must not use cloud services or download models. Output is capped at 128 KiB / 500 cues and execution at 20 seconds. No adapter is configured by default. Captions and generated speech transcripts remain distinct; recognition accuracy is the adapter's responsibility.
+
+## Article and conversation evidence
 
 Expanded X Articles have a separate optional `article` field containing `title`, `author`, `text`, ordered `blocks`, `links`, `media`, `source`, `truncated` and `limitations`. Paragraphs, headings, list items, quotations, code, tables (including rows), separators and media positions are preserved. Tables, formulas and references are allowed to render within a bounded scroll/wait step. No OCR is used for Article text. Article figures stay in `article.media` and can be inspected with `read_media`; ordinary `post.text` and quoted posts stay separate. Preview-only cards retain their existing `article_preview` fields and explicit truncation; opening their post permalink obtains the full rendered Article when available.
 
@@ -134,7 +158,7 @@ Small per-call settings can be supplied in PowerShell before starting the server
 
 Navigation and extraction failures before the first collected post get at most one retry after 500 ms, within the same active deadline, with the exact URL/query/sort. Access barriers, sort mismatches and unexpected redirects are never retried. Partial retrievals preserve their evidence without restarting the snapshot. A later cursor can resume an unfinished branch within the total traversal budget. Login walls are not empty results. At most eight browser jobs are admitted; browser work is serialized. Each job receives its full active deadline after acquiring the queue slot. Excess work or an expired queue wait returns `busy`; cancellation while queued returns promptly. HTTP checks the loopback peer, exact Host, and any Origin, and rejects cross-site browser requests. The local OS user and authenticated tunnel operator are trusted. Do not proxy this endpoint publicly.
 
-Profiles, `.env*`, session artifacts, debug captures, dependency caches and local tools are git-ignored. The application does not export cookies or storage state, and does not log raw browser errors or request headers. Login and authentication-verification screens are never captured. Recordings and traces are disabled. Attachment image capture occurs only when `read_media` is requested. There is no MCP navigation, JS, shell, filesystem, messaging or write capability.
+Profiles, `.env*`, session artifacts, debug captures, dependency caches and local tools are git-ignored. The application does not export cookies or storage state, and does not log raw browser errors, request headers or base64 pixels. Login and authentication-verification screens are never captured. Recordings and traces are disabled. Images accompany post/thread retrieval or explicit `read_media` requests; video decoding requires `read_video` or a returned frame ID. There is no caller-controlled MCP navigation, JS, shell, filesystem, messaging or write capability.
 
 ## Live verification and prompts
 

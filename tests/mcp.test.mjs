@@ -8,6 +8,7 @@ import { Reader } from "../dist/reader.js";
 import { serveHttp } from "../dist/http.js";
 import { FixtureBrowser } from "./fixtures.mjs";
 import { request } from "node:http";
+import { videoRoutes, videoUrl } from "./video-fixtures.mjs";
 
 async function exercise(client) {
   const { tools } = await client.listTools();
@@ -20,6 +21,7 @@ async function exercise(client) {
       "get_user_posts",
       "get_status",
       "read_media",
+      "read_video",
     ].sort(),
   );
   for (const tool of tools)
@@ -58,6 +60,55 @@ async function exercise(client) {
   });
   assert.equal(media.content[0].type, "image");
   assert.equal(media.content[0].mimeType, "image/png");
+  assert.equal(media.structuredContent.data.data_url, undefined);
+  const compat = await client.callTool({
+    name: "read_media",
+    arguments: { media_id: mediaId, structured_fallback: true },
+  });
+  assert.equal(
+    compat.structuredContent.data.data_url,
+    `data:image/png;base64,${compat.content[0].data}`,
+  );
+  const videoPost = await client.callTool({
+    name: "get_post",
+    arguments: { url: videoUrl },
+  });
+  const videoId = videoPost.structuredContent.data.posts[0].media[0].media_id;
+  const video = await client.callTool({
+    name: "read_video",
+    arguments: {
+      media_id: videoId,
+      timestamps: [0.6, 2.1],
+      frame_count: 2,
+      structured_fallback: true,
+    },
+  });
+  assert.equal(
+    video.isError,
+    undefined,
+    JSON.stringify(video.structuredContent.error),
+  );
+  assert.equal(
+    video.structuredContent.data.data_url,
+    `data:image/png;base64,${video.content[0].data}`,
+  );
+  assert.deepEqual(
+    video.structuredContent.data.frames.map((f) => f.timestamp_seconds),
+    [0.75, 2.25],
+  );
+  const frame = await client.callTool({
+    name: "read_media",
+    arguments: {
+      media_id: video.structuredContent.data.frames[1].media_id,
+      structured_fallback: true,
+    },
+  });
+  assert.equal(frame.structuredContent.data.source, "decoded_video_frame");
+  assert.equal(
+    frame.structuredContent.data.data_url,
+    `data:image/png;base64,${frame.content[0].data}`,
+  );
+  assert.equal(frame.structuredContent.data.timestamp_seconds, 2.25);
   await client.callTool({
     name: "search_x",
     arguments: { query: "from:alice cats", sort: "latest", limit: 5 },
@@ -67,6 +118,10 @@ async function exercise(client) {
     { name: "get_post", arguments: { url: "https://x.com/messages" } },
     { name: "get_status", arguments: { cookie: "FAKE_SECRET_DO_NOT_ACCEPT" } },
     { name: "read_media", arguments: { media_id: "C:/secret.png" } },
+    {
+      name: "read_video",
+      arguments: { media_id: videoId, url: "https://evil.test/video.mp4" },
+    },
   ])
     assert.equal((await client.callTool(call)).isError, true);
   const loggedOut = await client.callTool({
@@ -121,11 +176,17 @@ test("official MCP client exercises stdio schemas, retrieval, continuation and P
       ),
     );
   }
-  assert.doesNotMatch(logs, /FAKE_SECRET|Original claim|Cookie|Authorization/);
+  assert.doesNotMatch(
+    logs,
+    /FAKE_SECRET|Original claim|Cookie|Authorization|data:image|iVBORw0/,
+  );
 });
 
 test("official MCP HTTP client exercises the same stack, Host/Origin guards and clean shutdown", async () => {
-  const http = await serveHttp(new Reader(new FixtureBrowser()), 0);
+  const http = await serveHttp(
+    new Reader(new FixtureBrowser({ onPage: videoRoutes })),
+    0,
+  );
   const client = new Client({ name: "synthetic-http-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(http.url));
   try {
@@ -183,7 +244,7 @@ test("MCP HTTP accepts many simultaneous sessions and keeps each usable", async 
       32,
     );
     for (const { client } of clients) {
-      assert.equal((await client.listTools()).tools.length, 6);
+      assert.equal((await client.listTools()).tools.length, 7);
     }
     await Promise.all(
       clients.map(({ transport }) => transport.terminateSession()),
@@ -237,7 +298,7 @@ test("MCP HTTP expires abandoned sessions while retaining recently used sessions
     assert.match(await expired.text(), /session expired/);
     const retained = await send(list, active);
     assert.equal(retained.status, 200);
-    assert.equal((await retained.json()).result.tools.length, 6);
+    assert.equal((await retained.json()).result.tools.length, 7);
   } finally {
     await http.close();
     t.mock.timers.reset();

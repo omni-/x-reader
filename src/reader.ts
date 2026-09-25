@@ -7,6 +7,8 @@ import { config, LOCAL } from "./config.js";
 import { ExpiringStore } from "./cache.js";
 import { ReaderError, publicError, logEvent } from "./errors.js";
 import { collectPage, screenshotMedia } from "./dom.js";
+import { captureVideo, type VideoRef } from "./video.js";
+import type { MediaImage } from "./media.js";
 import {
   postUrl,
   username,
@@ -15,6 +17,7 @@ import {
   searchInput,
   userInput,
   allowedImage,
+  readVideoInput,
 } from "./validation.js";
 import {
   stopReasons,
@@ -38,15 +41,11 @@ type Traversal = {
   terminal: boolean;
 };
 export type MediaRef = { post_url: string; post_id: string; src: string };
-export type MediaImage = {
-  data: string;
-  mimeType: "image/png";
-  post_url: string;
-  width: number;
-  height: number;
-  source: "cdn_image" | "rendered_crop";
-  limitations: string[];
-};
+export type { MediaImage } from "./media.js";
+type StoredMedia =
+  | MediaRef
+  | VideoRef
+  | { type: "video_frame"; video: VideoRef; timestamp: number };
 type MediaResult =
   | { media_id: string; image: MediaImage }
   | { media_id: string; error: { code: string; message: string } };
@@ -92,7 +91,7 @@ function initial(focalId: string | null, maxDepth: number): Traversal {
         "Null parent IDs are unknown. Adjacency, mentions and conversation membership do not establish an exact parent.",
         "Traversal depth counts page-expansion hops from the focal post, not proven reply-chain depth. The UI does not always identify the conversation root.",
         "Quoted posts are separate source material, not replies. Quote-posts elsewhere are not enumerated.",
-        "Image interpretation belongs to the calling model and must remain separate from post/Article text. Check media_content for supplied pixels and limitations; read_media retrieves deferred images. Videos are metadata-only.",
+        "Image interpretation belongs to the calling model and must remain separate from post/Article text. Check media_content for supplied pixels and limitations; read_media retrieves deferred images. Use read_video for discovered video IDs; sparse frames cannot establish continuous coverage.",
       ],
     },
   };
@@ -109,7 +108,7 @@ function stopFrom(error: unknown, signal?: AbortSignal): StopReason {
 
 export class Reader {
   private readonly cursors = new ExpiringStore<Traversal>(config.cacheMs, 4);
-  private readonly media = new ExpiringStore<MediaRef>(config.cacheMs, 1000);
+  private readonly media = new ExpiringStore<StoredMedia>(config.cacheMs, 1000);
   private generation: string | undefined;
   constructor(private readonly browser: BrowserPort = new BrowserSession()) {}
 
@@ -207,6 +206,22 @@ export class Reader {
           post_id: post.id,
           src: item.url,
         }).id;
+    }
+    for (const owner of [post, ...post.quoted_posts]) {
+      if (!owner.id || !owner.url) continue;
+      const videos = [...owner.media, ...(owner.article?.media ?? [])].filter(
+        (item) => item.type === "video",
+      );
+      for (const [index, item] of videos.entries()) {
+        if (!item.media_id)
+          item.media_id = this.media.put(owner.id, {
+            type: "video",
+            post_url: owner.url,
+            post_id: owner.id,
+            src: item.url ?? "",
+            index,
+          }).id;
+      }
     }
   }
 
@@ -507,6 +522,44 @@ export class Reader {
     return result.image;
   }
 
+  async readVideo(input: z.input<typeof readVideoInput>, signal?: AbortSignal) {
+    const options = readVideoInput.parse(input);
+    await this.syncCache();
+    const entry = this.media.get(options.media_id);
+    if (!("type" in entry.value) || entry.value.type !== "video")
+      throw new ReaderError(
+        "media_refused",
+        "read_video requires a video media_id discovered by retrieving a public post.",
+      );
+    const reference = entry.value;
+    const result = await this.browser.run(
+      (page, active) => captureVideo(page, reference, options, active),
+      signal,
+    );
+    return {
+      image: result.sheet,
+      metadata: {
+        ...result.metadata,
+        frames: result.frames.map((frame, index) => ({
+          media_id: this.media.put(
+            reference.post_id,
+            {
+              type: "video_frame",
+              video: reference,
+              timestamp: result.requested[index]!,
+            },
+            entry.expires,
+          ).id,
+          requested_timestamp_seconds: result.requested[index]!,
+          timestamp_seconds: frame.timestamp_seconds!,
+          width: frame.width,
+          height: frame.height,
+          expires_at: new Date(entry.expires).toISOString(),
+        })),
+      },
+    };
+  }
+
   async readMediaBatch(
     ids: string[],
     signal?: AbortSignal,
@@ -518,6 +571,26 @@ export class Reader {
         checkSignal(active);
         try {
           const { value } = this.media.get(z.string().uuid().parse(id));
+          if ("type" in value) {
+            if (value.type === "video")
+              throw new ReaderError(
+                "media_refused",
+                "Use read_video for this video ID; then read_media with one of the returned frame IDs.",
+              );
+            const capture = await captureVideo(
+              page,
+              value.video,
+              readVideoInput.parse({
+                media_id: id,
+                timestamps: [value.timestamp],
+                frame_count: 1,
+                max_frame_dimension: 2048,
+              }),
+              active,
+            );
+            results.push({ media_id: id, image: capture.frames[0]! });
+            continue;
+          }
           if (!allowedImage(value.src))
             throw new ReaderError(
               "media_refused",

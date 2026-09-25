@@ -163,10 +163,75 @@ export const mediaContentSchema = z.object({
   content_index: z.number().int().nullable(),
   width: z.number().int().nullable(),
   height: z.number().int().nullable(),
-  source: z.enum(["cdn_image", "rendered_crop"]).nullable(),
+  source: z
+    .enum([
+      "cdn_image",
+      "rendered_crop",
+      "decoded_video_frame",
+      "contact_sheet",
+    ])
+    .nullable(),
   server_analysis: z.literal(false),
   limitations: z.array(z.string()),
 });
+export const imageResultSchema = mediaContentSchema.extend({
+  mime_type: z.literal("image/png"),
+  kind: z.enum(["rendered_image", "video_frame", "video_contact_sheet"]),
+  data_url: z
+    .string()
+    .regex(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/)
+    .max(5_592_430)
+    .optional(),
+  timestamp_seconds: z.number().nonnegative().optional(),
+});
+const cueSchema = z.object({
+  start_seconds: z.number(),
+  end_seconds: z.number(),
+  text: z.string(),
+});
+export const videoResultSchema = imageResultSchema.extend({
+  duration_seconds: z.number(),
+  coverage: z.object({
+    start_seconds: z.number(),
+    end_seconds: z.number(),
+    sampled_start_seconds: z.number(),
+    sampled_end_seconds: z.number(),
+    fraction: z.number(),
+    complete: z.literal(false),
+  }),
+  frames: z.array(
+    z.object({
+      media_id: z.string().uuid(),
+      requested_timestamp_seconds: z.number(),
+      timestamp_seconds: z.number(),
+      width: z.number().int(),
+      height: z.number().int(),
+      expires_at: z.string(),
+    }),
+  ),
+  captions: z.object({
+    source: z.literal("captions"),
+    status: z.enum(["available", "unavailable"]),
+    cues: z.array(cueSchema),
+    limitations: z.array(z.string()),
+  }),
+  audio: z.object({
+    status: z.enum(["available", "unavailable"]),
+    limitations: z.array(z.string()),
+  }),
+  transcript: z.object({
+    source: z.literal("local_speech_transcription"),
+    status: z.enum([
+      "available",
+      "not_requested",
+      "not_configured",
+      "unavailable",
+    ]),
+    cues: z.array(cueSchema),
+    limitations: z.array(z.string()),
+  }),
+});
+export type VideoResult = z.infer<typeof videoResultSchema>;
 export const resultSchema = z.object({
   media_content: z.array(mediaContentSchema).optional(),
   search: z

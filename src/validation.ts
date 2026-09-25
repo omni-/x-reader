@@ -98,6 +98,26 @@ export const usernameSchema = z
     }
   }, "Invalid X handle");
 export const cursorSchema = z.string().uuid().optional();
+export const readMediaInput = z
+  .object({
+    media_id: z.string().uuid(),
+    structured_fallback: z.boolean().default(false),
+  })
+  .strict();
+export const readVideoInput = readMediaInput
+  .extend({
+    start_seconds: z.number().finite().nonnegative().optional(),
+    end_seconds: z.number().finite().positive().optional(),
+    frame_count: z.number().int().min(1).max(12).default(8),
+    timestamps: z
+      .array(z.number().finite().nonnegative())
+      .min(1)
+      .max(12)
+      .optional(),
+    max_frame_dimension: z.number().int().min(128).max(2048).default(1280),
+    transcribe: z.boolean().default(false),
+  })
+  .strict();
 export const getPostInput = z.object({ url: postUrlSchema }).strict();
 export const threadInput = z
   .object({
@@ -165,6 +185,31 @@ export function allowedImage(value: string): boolean {
       !url.username &&
       !url.password &&
       /^\/media\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9]+)?$/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** CDN media only. This is also applied to every playlist URI before selection. */
+export function allowedVideoResource(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      value.length <= 2048 &&
+      value.startsWith("https://") &&
+      !/[\s\\]/.test(value) &&
+      url.protocol === "https:" &&
+      url.hostname === "video.twimg.com" &&
+      !url.port &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      /^\/(?:ext_tw_video|amplify_video|tweet_video|subtitles)\/[A-Za-z0-9_./-]+$/.test(
+        url.pathname,
+      ) &&
+      !/\.{2}|%/i.test(url.pathname) &&
+      /\.(?:m3u8|mp4|m4s|ts|aac|vtt|webm)$/i.test(url.pathname)
     );
   } catch {
     return false;

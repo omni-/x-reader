@@ -126,23 +126,36 @@ export async function extractVisible(
               "No server image analysis. Inspect the labeled MCP image content, or call read_media if pixels were not supplied. Keep image interpretation separate from source text.",
           };
         });
-      const video = [
+      const candidates = [
         ...root.querySelectorAll(
           'video, [data-testid="videoPlayer"], a[href^="/i/broadcasts/"]',
         ),
-      ].find((e) => !exclude.some((q) => q.contains(e)));
-      if (video)
+      ].filter((e) => !exclude.some((q) => q.contains(e)));
+      const videos = candidates
+        .filter(
+          (e) =>
+            !candidates.some((parent) => parent !== e && parent.contains(e)),
+        )
+        .slice(0, limit);
+      for (const video of videos) {
+        const player =
+          video instanceof HTMLVideoElement
+            ? video
+            : video.querySelector("video");
         images.push({
           media_id: null,
           type: "video",
           url:
             video instanceof HTMLAnchorElement
               ? new URL(video.href, "https://x.com").href
-              : null,
+              : player?.poster?.startsWith("https://pbs.twimg.com/")
+                ? player.poster.split("?")[0]!
+                : null,
           alt_text: null,
           limitation:
-            "Video metadata only; playback and transcription are not collected.",
+            "Use read_video with this short-lived media_id for decoded frames and available captions. Posters are not decoded video frames.",
         });
+      }
       return images;
     };
     const articleContent = (
@@ -790,6 +803,32 @@ async function collectPageOnce(
   if (initialState !== "ready")
     throw new ReaderError(initialState, actionFor(initialState));
   await hydrateArticles(page, signal);
+  // X inserts attachment players after the post shell. Wait briefly for DOM quiet,
+  // with a hard cap so continuously updating timelines cannot hold the request.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const root = document.querySelector('[data-testid="primaryColumn"]');
+        if (!root) {
+          resolve();
+          return;
+        }
+        let quiet: ReturnType<typeof setTimeout>;
+        const finish = () => {
+          observer.disconnect();
+          clearTimeout(quiet);
+          clearTimeout(cap);
+          resolve();
+        };
+        const observer = new MutationObserver(() => {
+          clearTimeout(quiet);
+          quiet = setTimeout(finish, 500);
+        });
+        const cap = setTimeout(finish, 1500);
+        quiet = setTimeout(finish, 500);
+        observer.observe(root, { childList: true, subtree: true });
+      }),
+  );
   let foundFocal = false;
   let ordering = "Website order (label unavailable)";
   let scrolls = 0;

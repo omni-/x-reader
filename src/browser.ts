@@ -322,6 +322,7 @@ export class BrowserSession {
           headless: config.headless,
           viewport: { width: 1280, height: 900 },
           acceptDownloads: false,
+          serviceWorkers: "block",
           timeout: Math.max(
             1,
             Math.min(
