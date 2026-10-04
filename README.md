@@ -52,7 +52,13 @@ For a local MCP client, configure its executable as `node` and arguments as the 
 
 ## Connect ChatGPT with Secure MCP Tunnel
 
-Documentation checked September 20, 2026 UTC. This is a private developer-mode MCP connection, requiring no custom UI or plugin manifest.
+Documentation checked October 3, 2026 (America/Los_Angeles). OpenAI's [developer-mode documentation](https://developers.openai.com/api/docs/guides/developer-mode) explicitly includes **Plus** web accounts. Downgrading from Pro to Plus does not, under these documented requirements, require converting x-reader or adding a plugin package. Account/workspace access and Platform tunnel permissions still apply; this is not verification of a particular account after its downgrade.
+
+The [official personal-plugin quickstart](https://developers.openai.com/plugins/quickstart) creates a plugin by connecting an existing MCP server. x-reader already supplies the tools, server instructions, Streamable HTTP and stdio transports, and image/video responses. No repository manifest, separate skill or custom UI is needed for this connection. [Distributable plugin packaging](https://developers.openai.com/plugins/build/plugins) is an optional separate workflow; it does not grant plan or tunnel access.
+
+If x-reader is already connected, reuse that connection and tunnel. Start the existing setup with `npm start`, then follow [Install and verify in ChatGPT](#install-and-verify-in-chatgpt). There is no need to create a duplicate connection or reinitialize a working tunnel just because the subscription changes.
+
+### First-time tunnel setup
 
 1. Confirm account access. OpenAI lists Pro, Plus, Business, Enterprise and Education web accounts for [developer mode](https://developers.openai.com/api/docs/guides/developer-mode); workspace policy can still limit access. Check availability in your own account and enable it under Settings → Security and login.
 2. Open [Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels). Creating/editing needs **Tunnels Read + Manage**; running/selecting a tunnel needs **Read + Use**. Associate it with the intended Platform organization and ChatGPT workspace. Personal accounts use their personal Platform organization. These are separate from ChatGPT permissions. [Official tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
@@ -76,11 +82,20 @@ After initializing the profile, stop the setup server and use **`npm start`** fo
 
 These flags and the no-auth HTTP sample were checked against the official Windows client v0.0.14. Check its help when using a newer version. The generated client profile references the environment variable; no hand-written tunnel config is needed. Use `doctor` again when reusing an existing profile instead of overwriting it.
 
-When the client is healthy, open [ChatGPT Plugins](https://chatgpt.com/plugins), select the plus button, name the connection **x-reader**, choose **Tunnel**, and select the tunnel or supply its ID. The local MCP application uses No Authentication behind the authenticated tunnel. Review the six discovered tools and enable the connection in a conversation. Current [OpenAI connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt) supersede older custom-app UI labels.
+### Install and verify in ChatGPT
+
+These are account-side steps. Cloning this repository or merging a PR does not create or install a plugin in ChatGPT.
+
+1. With `npm start` running, open [ChatGPT Plugins](https://chatgpt.com/plugins) and reuse the existing **x-reader** entry if present. For a new connection, enable developer mode, select the plus button, name it **x-reader**, choose **Tunnel**, and select the tunnel or supply its ID. The local MCP application uses No Authentication behind the authenticated tunnel. See the [official connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+2. Open x-reader in your personal plugins and install it with the plus button if it is not already installed, as described in the [personal-plugin quickstart](https://developers.openai.com/plugins/quickstart). Refresh the connection's tools after updating the server. Confirm all **seven** tools below are available, including `read_media` and `read_video`.
+3. Start a new Work chat, select x-reader with `@`, and ask it to call `get_status`. Confirm the dedicated browser is ready; resolve any reported login or setup issue locally.
+4. Ask for a public post with an image, then call `read_media` with its returned `media_id`. For video, retrieve a public video post and call `read_video` with its returned ID; local FFmpeg/ffprobe must be installed. Check that ChatGPT can actually inspect the image/contact-sheet pixels. A successful tool response or `provided_to_client` status alone does not verify model vision; see [Tools and evidence](#tools-and-evidence).
+
+Repeat these account checks after the Plus downgrade. If developer mode or the tunnel is unavailable, check account/workspace access and tunnel permissions; adding a plugin manifest cannot resolve missing entitlements.
 
 Keep both the HTTP server and tunnel client running while using the connection. If the tunnel is missing, verify workspace association and Read + Use permission. If your account lacks these features, use a local stdio client while resolving access. No public endpoint or inbound firewall rule is needed, and x-reader will not bind to a public interface. Do not substitute a public unauthenticated tunnel.
 
-The recorded verification does not include authenticated tunnel checks or a ChatGPT invocation. Verify `doctor` readiness and a ChatGPT tool call with your own account; see [VERIFICATION.md](VERIFICATION.md) for the checks already performed.
+Repository checks do not verify installation or access on your ChatGPT account after a downgrade. Verify `doctor` readiness and the ChatGPT calls above with that account; see [VERIFICATION.md](VERIFICATION.md) and the [media verification notes](docs/task-notes/media-video.md) for recorded server, transport and model-vision results.
 
 ## Tools and evidence
 
